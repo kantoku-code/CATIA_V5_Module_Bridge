@@ -1,2 +1,5 @@
-# CATIA_V5_Module_Bridge
-Import/export CATVBA modules.
+# **_CATIA V5 Module Bridge_**
+
+Simply import/export CATVBA modules.
+
+However, doing so allows version control in Git.
