@@ -11,7 +11,7 @@ Option Explicit
 
 Private Const DEBUG_MODE = False                        'デバッグモード
 Private Const APP_NAME = "ModuleBridge"                 'アプリネーム
-Private Const VERSION = "0.0.5"                         'バージョン
+Private Const VERSION = "0.0.6"                         'バージョン
 Private Const THIS_PROJECT_NAME = "ModuleBridgeProject" 'このプロジェクト名
 Private Const USER_JSON_NAME = "user_data.json"         'データ保存ファイル名
 Private Const SEPARATOR = "|"                           'パスの区切り文字-VBA-JSON対策
@@ -27,9 +27,9 @@ Private mJson As clsJsonConverter                       'JsonParser
 Private Sub Class_Initialize()
 
     Set mUtil = New clsVBAUtilityLib
-    mUtil.DEBUG_MODE = DEBUG_MODE
+    mUtil.DebugMode = DEBUG_MODE
 
-    Set mVbe = mUtil.get_vbe()
+    Set mVbe = mUtil.GetVbe()
     Set mJson = New clsJsonConverter
     Set mProjectLst = get_project_list()
 
@@ -165,7 +165,7 @@ Private Function get_fanction_names( _
     End With
     
     get_fanction_names = Join( _
-        mUtil.collection_to_array_let(lst), _
+        mUtil.CollectionToArrayLet(lst), _
         vbCrLf _
     )
 
@@ -212,11 +212,50 @@ Function get_module_info( _
     On Error GoTo 0
     If comp Is Nothing Then Exit Function
 
+    'プロジェクト全体の行数
+    Dim totalCharCount As Long
+    totalCharCount = 0
+    
+    Dim compX As Object
+    For Each compX In proj.VBComponents
+        totalCharCount = totalCharCount + GetValidCharacterCount(compX)
+    Next
+
     get_module_info = _
         "プロジェクト名 : " & proj.name & vbCrLf & _
-        "ファイルパス : " & proj.fileName & vbCrLf & _
-        "モジュール名 : " & moduleName & "." & get_extension(comp) & vbCrLf & _
+        "総ステップ数　 : " & totalCharCount & vbCrLf & _
+        "ファイルパス 　: " & proj.Filename & vbCrLf & _
+        "モジュール名 　: " & moduleName & "." & get_extension(comp) & vbCrLf & _
+        "モジュールステップ数: " & GetValidCharacterCount(comp) & vbCrLf & _
         "関数名リスト : " & vbCrLf & get_fanction_names(comp)
+
+End Function
+
+
+'コンポーネントのコメント部分の除いた文字数の取得
+'param: vbComp-対象コンポーネント
+Private Function GetValidCharacterCount( _
+        ByVal vbComp As Object) As Long
+
+    Dim codeMod As Object ' CodeModule
+    Dim totalChars As Long
+    Dim i As Long
+    Dim codeLine As String
+    
+    ' CodeModuleオブジェクトを取得
+    Set codeMod = vbComp.CodeModule
+    
+    totalChars = 0
+    ' 各行をチェックしてコメントを除外
+    For i = 1 To codeMod.CountOfLines
+        codeLine = Trim(codeMod.Lines(i, 1))
+        If Left(codeLine, 1) <> "'" Then
+            totalChars = totalChars + Len(codeLine)
+        End If
+    Next i
+    
+    ' 結果を返す
+    GetValidCharacterCount = totalChars
 
 End Function
 
@@ -232,14 +271,14 @@ Sub import_project( _
     On Error GoTo 0
     If proj Is Nothing Then Exit Sub
 
-    Dim key As String
-    key = Replace(proj.fileName, "\", SEPARATOR)
+    Dim Key As String
+    Key = Replace(proj.Filename, "\", SEPARATOR)
     
-    If Not mUserDict.Exists(key) Then Exit Sub
+    If Not mUserDict.exists(Key) Then Exit Sub
     
     Dim path As String
-    path = mUserDict(key)("path")
-    If Not mUtil.get_fso().FolderExists(path) Then Exit Sub
+    path = mUserDict(Key)("path")
+    If Not mUtil.GetFso().FolderExists(path) Then Exit Sub
     
     Call remove_modules(projectIdx)
     Call import_modules(proj, path)
@@ -265,7 +304,7 @@ Function get_dir_by_project_name( _
     path = parentDirPath & "\" & proj.name
     
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
     
     If Not fso.FolderExists(path) Then
         fso.CreateFolder path
@@ -317,7 +356,7 @@ Private Function get_target_file_path_list( _
 
     
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
     
     Dim dir As Object
     Set dir = fso.GetFolder(path)
@@ -378,7 +417,17 @@ Sub export_project( _
     Dim comp As Object
     For Each name In get_module_name_list(projectIdx)
         Set comp = proj.VBComponents(name)
+        
+        On Error Resume Next
+    
         comp.Export dirPath & "\" & comp.name & "." & get_extension(comp)
+        
+        If Not Err.Number = 0 Then
+            MsgBox "書き出しに失敗しました。.git以外を削除し再トライしてください"
+            Exit Sub
+        End If
+        
+        On Error GoTo 0
     Next
     
     update_userdata proj, dirPath
@@ -404,10 +453,10 @@ Sub export_project_child_folder( _
     If proj Is Nothing Then Exit Sub
 
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
 
     Dim dirPath As String
-    dirPath = fso.GetParentFolderName(proj.fileName) & "\" & SOURCE_FOLDER_NAME
+    dirPath = fso.GetParentFolderName(proj.Filename) & "\" & SOURCE_FOLDER_NAME
 
     If Not fso.FolderExists(dirPath) Then
         fso.CreateFolder (dirPath)
@@ -429,14 +478,14 @@ Sub overwriting_project( _
     On Error GoTo 0
     If proj Is Nothing Then Exit Sub
 
-    Dim key As String
-    key = Replace(proj.fileName, "\", SEPARATOR)
+    Dim Key As String
+    Key = Replace(proj.Filename, "\", SEPARATOR)
 
     Dim dirPath As String
-    dirPath = mUserDict(key)("path")
+    dirPath = mUserDict(Key)("path")
     
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
     
     '見つからない場合は削除で良いのか？
     If Not fso.FolderExists(dirPath) Then Exit Sub
@@ -458,14 +507,14 @@ Sub open_folder( _
     On Error GoTo 0
     If proj Is Nothing Then Exit Sub
 
-    Dim key As String
-    key = Replace(proj.fileName, "\", SEPARATOR)
+    Dim Key As String
+    Key = Replace(proj.Filename, "\", SEPARATOR)
 
     Dim dirPath As String
-    dirPath = mUserDict(key)("path")
+    dirPath = mUserDict(Key)("path")
     
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
     
     '見つからない場合は削除で良いのか？
     If Not fso.FolderExists(dirPath) Then Exit Sub
@@ -483,19 +532,19 @@ Private Sub update_userdata( _
         ByVal proj As Object, _
         ByVal path As String)
     
-    Dim key As String
-    key = Replace(proj.fileName, "\", SEPARATOR)
+    Dim Key As String
+    Key = Replace(proj.Filename, "\", SEPARATOR)
     
-    If mUserDict.Exists(key) Then
-        mUserDict.Remove key
+    If mUserDict.exists(Key) Then
+        mUserDict.Remove Key
     End If
 
     Dim info As Object
-    Set info = mUtil.init_dict()
+    Set info = mUtil.InitDict()
     info.Add "name", proj.name
     info.Add "path", path
 
-    mUserDict.Add key, info
+    mUserDict.Add Key, info
     
     Call cleanUp_userdata
         
@@ -534,7 +583,7 @@ Private Sub remove_module_files( _
         ByVal dirPath As String)
         
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
     
     If Not fso.FolderExists(dirPath) Then Exit Sub
 
@@ -555,6 +604,9 @@ Private Sub remove_module_files( _
             fso.DeleteFile path
         On Error GoTo 0
     Next
+    
+    'ウェイト
+    Call mUtil.Wait(1)
 
 End Sub
 
@@ -581,8 +633,8 @@ End Function
 'return: このプロジェクトのフォルダパス
 Private Function get_this_dir_path() As String
 
-    get_this_dir_path = mUtil.get_fso().GetParentFolderName( _
-        get_this_project().fileName _
+    get_this_dir_path = mUtil.GetFso().GetParentFolderName( _
+        get_this_project().Filename _
     )
 
 End Function
@@ -607,14 +659,14 @@ Private Function get_user_data() As Object
     Dim path As String
     path = get_this_dir_path() & "\" & USER_JSON_NAME
     
-    mUtil.dump "userdata_path:" & path
+    mUtil.Dump "userdata_path:" & path
     
     Dim dict As Object
-    If mUtil.get_fso().FileExists(path) Then
+    If mUtil.GetFso().FileExists(path) Then
         Set dict = load_json(path)
         dict("ver") = VERSION
     Else
-        Set dict = mUtil.init_dict()
+        Set dict = mUtil.InitDict()
         dict.Add "ver", VERSION
     End If
     
@@ -627,7 +679,7 @@ End Function
 Private Sub cleanUp_userdata()
 
     Dim fso As Object
-    Set fso = mUtil.get_fso()
+    Set fso = mUtil.GetFso()
 
     Dim removeLst As Collection
     Set removeLst = New Collection
@@ -635,26 +687,26 @@ Private Sub cleanUp_userdata()
     Dim filePath As String
     Dim dirPath As String
 
-    Dim key As Variant 'String
-    For Each key In mUserDict.keys()
-        If key = "ver" Then GoTo continue
+    Dim Key As Variant 'String
+    For Each Key In mUserDict.keys()
+        If Key = "ver" Then GoTo continue
 
-        filePath = Replace(key, SEPARATOR, "\")
+        filePath = Replace(Key, SEPARATOR, "\")
         If Not fso.FileExists(filePath) Then
-            removeLst.Add key
+            removeLst.Add Key
             GoTo continue
         End If
         
-        dirPath = mUserDict(key)("path")
+        dirPath = mUserDict(Key)("path")
         If Not fso.FolderExists(dirPath) Then
-            removeLst.Add key
+            removeLst.Add Key
             GoTo continue
         End If
 continue:
     Next
     
-    For Each key In removeLst
-        mUserDict.Remove key
+    For Each Key In removeLst
+        mUserDict.Remove Key
     Next
     
 End Sub
@@ -673,7 +725,7 @@ Function has_user_data( _
     On Error GoTo 0
     If proj Is Nothing Then Exit Function
     
-    has_user_data = mUserDict.Exists(Replace(proj.fileName, "\", SEPARATOR))
+    has_user_data = mUserDict.exists(Replace(proj.Filename, "\", SEPARATOR))
 
 End Function
 
@@ -685,7 +737,7 @@ Private Sub save_json( _
         ByVal path As String, _
         ByVal dict As Object)
     
-    Call mUtil.write_file( _
+    Call mUtil.WriteFile( _
         path, _
         mJson.ConvertToJson(dict, 3) _
     )
@@ -701,10 +753,10 @@ Private Function load_json( _
     
     Set load_json = Nothing
     
-    If Not mUtil.get_fso().FileExists(path) Then Exit Function
+    If Not mUtil.GetFso().FileExists(path) Then Exit Function
     
     Dim dict As Object
-    Set dict = mJson.ParseJson(mUtil.read_file(path))
+    Set dict = mJson.ParseJson(mUtil.ReadFile(path))
     
     Set load_json = dict
     

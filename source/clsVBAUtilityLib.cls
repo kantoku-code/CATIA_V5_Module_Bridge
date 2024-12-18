@@ -9,21 +9,23 @@ Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 '/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/
 '/_/
-'/_/ ユーティリティクラス
+'/_/ clsVbaUtilityLib
 '/_/ 主に配列、辞書
 '/_/
 '/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/
-
 Option Explicit
 
-Private Const VER = "0.0.6"
+'Win API
+Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal ms As Long)
+
+Private Const VER = "0.0.16"
 
 'デバッグモード
-Private m_debug_mode As Boolean
+Private m_DebugMode As Boolean
 
 
 Private Sub Class_Initialize()
-    m_debug_mode = True
+    m_DebugMode = True
 End Sub
 
 
@@ -32,37 +34,235 @@ Private Sub Class_Terminate()
 End Sub
 
 
-Property Get DEBUG_MODE() As Boolean
-    DEBUG_MODE = m_debug_mode
+Property Get DebugMode() As Boolean
+    DebugMode = m_DebugMode
 End Property
 
 
-Property Let DEBUG_MODE(ByVal mode As Boolean)
-    m_debug_mode = mode
+Property Let DebugMode(ByVal mode As Boolean)
+    m_DebugMode = mode
 End Property
 
 
-Function get_ver() As String
-    get_ver = VER
+Function GetVer() As String
+    GetVer = VER
 End Function
 
 
 'ダンプ
 'param:string
 'return:
-Sub dump( _
-        ByVal txt As String)
+Sub Dump( _
+        ByVal Txt As String)
     
-    If Not m_debug_mode Then Exit Sub
-    Debug.Print txt
+    If Not m_DebugMode Then Exit Sub
+    Debug.Print Txt
 End Sub
+
+
+'変数のダンプ
+'param: v-変数
+'param: Txt(opt): ヘッダーコメント
+'return:
+Sub DumpV( _
+        ByVal X As Variant, _
+        Optional ByVal Txt As String = "")
+    
+    If Not m_DebugMode Then Exit Sub
+    
+    Debug.Print Txt & DumpVariable(X)
+
+End Sub
+
+
+''' @param x As Variant
+''' @return As String
+Function DumpVariable( _
+        ByVal X As Variant) As String
+
+    On Error Resume Next
+
+    Dim ty As String: ty = TypeName(X)
+    Select Case ty
+        Case "Boolean":     DumpVariable = X
+        Case "Integer":     DumpVariable = X & "%"
+        Case "Long":        DumpVariable = X & "&"
+        #If Win64 Then
+        Case "LongLong":    DumpVariable = X & "^"
+        #End If
+        Case "Single":      DumpVariable = X & "!"
+        Case "Double":      DumpVariable = X & "#"
+        Case "Currency":    DumpVariable = X & "@"
+        Case "Byte":        DumpVariable = "CByte(" & X & ")"
+        Case "Decimal":     DumpVariable = "CDec(" & X & ")"
+        Case "Date":
+            Dim d As String, t As String
+            If Abs(X) >= 1 Then d = Month(X) & "/" & Day(X) & "/" & Year(X)
+            If Not IsInt(X) Then t = Format(X, "h:nn:ss AM/PM")
+            DumpVariable = "#" & Trim(d & " " & t) & "#"
+        Case "String"
+            If StrPtr(X) = 0 Then
+                DumpVariable = "vbNullString"
+            Else
+                DumpVariable = """" & Replace(X, """", """""") & """"
+            End If
+        Case "Error"
+            If IsMissing(X) Then
+                DumpVariable = "Missing"
+            Else
+                DumpVariable = "CVErr(" & ReMatch(CStr(X), "\d+")(0) & ")"
+            End If
+        Case "ErrObject"
+            DumpVariable = "Err " & X.Number
+        Case "Empty", "Null", "Nothing", "Unknown"
+            DumpVariable = ty
+        Case Else
+            If IsObject(X) Then
+                Select Case ty
+                    Case "Dictionary"
+                        Dim keys As Variant
+                        keys = X.keys()
+                        Dim ar2 As Variant
+                        ReDim ar2(X.count - 1)
+                        Dim j As Long
+                        For j = 0 To X.count - 1: ar2(j) = DumpVariable(keys(j)) & ":" & DumpVariable(X(keys(j))): Next
+                        DumpVariable = "Dictionary(" & Join(ar2, ", ") & ")"
+                    Case "Collection"
+                        Dim ar3 As Variant
+                        ReDim ar3(X.count - 1)
+                        Dim k As Long
+                        For k = 1 To X.count: ar3(k - 1) = DumpVariable(X.Item(k)): Next
+                        DumpVariable = "Collection(" & Join(ar3, ", ") & ")"
+                    Case Else
+                        DumpVariable = ToStr(X)
+                End Select
+            ElseIf IsArray(X) Then
+                Dim rnk As Integer: rnk = ArrRank(X)
+                If rnk = 1 Then
+                    Dim lb As Long: lb = LBound(X)
+                    Dim ub As Long: ub = UBound(X)
+                    Dim ar As Variant
+                    If ub - lb < 0 Then
+                        ar = Array()
+                    Else
+                        Dim mx As Long: mx = 8 - 1
+                        Dim xb As Long: xb = IIf(ub - lb < mx, ub, lb + mx)
+                        ReDim ar(lb To xb)
+                        Dim i As Long
+                        For i = lb To xb: ar(i) = DumpVariable(X(i)): Next
+                    End If
+                    DumpVariable = "Array(" & Join(ar, ", ") & IIf(xb < ub, ", ...", "") & ")"
+                Else
+                    DumpVariable = Replace(ty, "()", "(" & String(rnk - 1, ",") & ")")
+                End If
+            Else
+                Err.Raise 51
+        End If
+    End Select
+    
+    On Error GoTo 0
+    
+End Function
+
+
+''' @param num As Variant(Of Numeric Or Date)
+''' @return As Boolean
+Function IsInt( _
+        ByVal num As Variant) As Boolean
+
+    If IsDate(num) Then num = CDbl(num)
+    If Not IsNumeric(num) Then Err.Raise 13
+    
+    IsInt = num = Fix(num)
+
+End Function
+
+
+''' @param expr As String
+''' @param ptrnFind As String
+''' @param iCase As Boolean
+''' @return As Variant(Of Array(Of String))
+Private Function ReMatch( _
+        ByVal expr As String, ByVal ptrnFind As String, _
+        Optional ByVal iCase As Boolean = False) As Variant
+    
+    Dim ret As Variant: ret = Array()
+    
+    Dim regex As Object:  Set regex = CreateRegExp(ptrnFind, IIf(iCase, "i", ""))
+    Dim ms As Object:     Set ms = regex.Execute(expr)
+    If ms.count < 1 Then: GoTo Ending
+    
+    Dim sms As Object:    Set sms = ms(0).SubMatches
+    ReDim ret(sms.count)
+    
+    ret(0) = ms.Item(0).value
+    Dim i As Integer
+    For i = 1 To UBound(ret): ret(i) = sms.Item(i - 1): Next
+    
+Ending:
+    ReMatch = ret
+End Function
+
+
+''' @param x As Variant
+''' @return As String
+Private Function ToStr(ByVal X As Variant) As String
+    If IsObject(X) Then
+        On Error GoTo Err438
+        ToStr = X.ToStr()
+        On Error GoTo 0
+    ElseIf IsArray(X) Then
+        ToStr = TypeName(X)
+    Else
+        ToStr = X
+    End If
+    
+    GoTo Escape
+    
+Err438:
+    Dim e As ErrObject: Set e = Err
+    Select Case e.Number
+        Case 438: ToStr = TypeName(X): Resume Next
+        Case Else: Err.Raise e.Number, e.source, e.Description, e.HelpFile, e.HelpContext
+    End Select
+    
+Escape:
+End Function
+
+
+''' @param arr As Variant(Of Array(Of T))
+''' @return As Integer
+Private Function ArrRank( _
+        ByVal arr As Variant) As Integer
+        
+    If Not IsArray(arr) Then Err.Raise 13
+    
+    Dim X As Long
+    Dim i As Integer: i = 0
+    On Error Resume Next
+    While Err.Number = 0: X = UBound(arr, IncrPre(i)): Wend
+    ArrRank = i - 1
+
+End Function
+
+
+''' @param n As Variant
+''' @param stepVal As Variant
+''' @return As Variant
+Private Function IncrPre( _
+        ByRef n As Variant, _
+        Optional ByVal stepVal As Variant = 1) As Variant
+
+    n = n + stepVal: IncrPre = n
+
+End Function
 
 
 '*****ｼｽﾃﾑな関数*****
 'APC取得
 'param:
 'return:Object(Of IApc)
-Function get_apc() As Object
+Function GetApc() As Object
     Dim COMObjectName As String
     #If VBA7 Then
         COMObjectName = "MSAPC.Apc.7.1"
@@ -79,59 +279,29 @@ Function get_apc() As Object
         Set oApc = CreateObject("MSAPC.Apc")
     End If
     
-    Set get_apc = oApc
+    Set GetApc = oApc
 End Function
 
 
 'VBE取得
 'param:
 'return:Object(Of IApc)
-Function get_vbe() As Object
-
-'    Select Case Application.name
-'        Case "Microsoft Excel"
-'            'excel
-'            Set get_vbe = Application.vbe
-'
-'        Case Else
-'            'catia
-'            Set get_vbe = get_apc().vbe
-'    End Select
-
-    Set get_vbe = get_apc().vbe
-    
+Function GetVbe() As Object
+    Set GetVbe = GetApc().VBE
 End Function
-
-
-''CATIAで実行しているか?
-''return: catiaでtrue
-'Private Function is_catia() As Boolean
-'
-'    is_catia = False
-'    Dim dmy As Object
-'    On Error Resume Next
-'        Set dmy = CATIA
-'    On Error GoTo 0
-'
-'    If dmy Is Nothing Then Exit Function
-'
-'    is_catia = True
-'
-'End Function
 
 
 '実行中のvbprojectのファルダ
 'param:
 'return:string
-Function get_this_dir() As String
-
+Function GetThisDir() As String
     Dim oApc As Object
-    Set oApc = get_apc()
+    Set oApc = GetApc()
 
     Dim projFilePath As String
-    projFilePath = oApc.ExecutingProject.VBProject.fileName
+    projFilePath = oApc.ExecutingProject.VBProject.Filename
     
-    get_this_dir = get_fso.GetParentFolderName(projFilePath)
+    GetThisDir = GetFso.GetParentFolderName(projFilePath)
     
 End Function
 
@@ -139,7 +309,7 @@ End Function
 'Scripting.Dictionary
 'param:compareMode-Long
 'return:Object(Of Dictionary)
-Function init_dict( _
+Function InitDict( _
         Optional compareMode As Long = vbBinaryCompare) As Object
 
     Dim dict As Object
@@ -147,7 +317,7 @@ Function init_dict( _
     
     dict.compareMode = compareMode
     
-    Set init_dict = dict
+    Set InitDict = dict
 End Function
 
 
@@ -155,23 +325,23 @@ End Function
 'param:txtArray-array(Of string)
 'param:compareMode-Long
 'return:Object(Of Dictionary)
-Function init_dict_by_array_count( _
+Function InitDictByArrayCount( _
         ByVal txtArray As Variant, _
         Optional compareMode As Long = vbBinaryCompare) As Object
 
     Dim dict As Object
-    Set dict = init_dict(compareMode)
+    Set dict = InitDict(compareMode)
 
-    Dim key As Variant
-    For Each key In txtArray
-        If Not dict.Exists(key) Then
-            dict(key) = dict(key) + 1
+    Dim Key As Variant
+    For Each Key In txtArray
+        If Not dict.exists(Key) Then
+            dict(Key) = dict(Key) + 1
         Else
-            Call dict.Add(key, 0)
+            Call dict.Add(Key, 0)
         End If
     Next
 
-    Set init_dict_by_array_count = dict
+    Set InitDictByArrayCount = dict
 End Function
 
 
@@ -179,34 +349,34 @@ End Function
 'param:dict1-Object(Of Dictionary)
 'param:dict2-Object(Of Dictionary
 'return:boolean
-Function is_equal_dict( _
+Function IsEqualDict( _
         ByVal dict1 As Object, _
         ByVal dict2 As Object) As Boolean
 
     If dict1.count <> dict2.count Then
-        is_equal_dict = False
+        IsEqualDict = False
         Exit Function
     End If
     
-    Dim key As Variant
-    For Each key In dict1.keys
-        If Not dict2.Exists(key) Then
-            is_equal_dict = False
+    Dim Key As Variant
+    For Each Key In dict1.keys
+        If Not dict2.exists(Key) Then
+            IsEqualDict = False
             Exit Function
         End If
-        If TypeName(dict1(key)) = "Dictionary" And TypeName(dict2(key)) = "Dictionary" Then
+        If TypeName(dict1(Key)) = "Dictionary" And TypeName(dict2(Key)) = "Dictionary" Then
             ' If both values are dictionaries, recursively compare them
-            If Not is_equal_dict(dict1(key), dict2(key)) Then
-                is_equal_dict = False
+            If Not IsEqualDict(dict1(Key), dict2(Key)) Then
+                IsEqualDict = False
                 Exit Function
             End If
-        ElseIf dict1(key) <> dict2(key) Then
-            is_equal_dict = False
+        ElseIf dict1(Key) <> dict2(Key) Then
+            IsEqualDict = False
             Exit Function
         End If
-    Next key
+    Next Key
 
-    is_equal_dict = True
+    IsEqualDict = True
     
 End Function
 
@@ -214,23 +384,23 @@ End Function
 '辞書のディープコピー
 'param:source-Object(Of Dictionary)
 'return:Object(Of Dictionary)
-Function deep_copy_dict( _
+Function DeepCopyDict( _
         ByVal source As Variant) As Object
 
-    Dim key As Variant
+    Dim Key As Variant
     Dim newDict As Object
     Dim value As Variant
     Set newDict = CreateObject("Scripting.Dictionary")
-    For Each key In source.keys
-        value = source.Item(key)
+    For Each Key In source.keys
+        value = source.Item(Key)
         If TypeName(value) = "Dictionary" Then
-            Set value = deep_copy_dict(value)
+            Set value = DeepCopyDict(value)
         End If
 
-        newDict.Add key, value
-    Next key
+        newDict.Add Key, value
+    Next Key
 
-    Set deep_copy_dict = newDict
+    Set DeepCopyDict = newDict
 
 End Function
 
@@ -240,7 +410,7 @@ End Function
 'param:count-long
 'param:value
 'return:Variant(Of Array)
-Function init_array( _
+Function InitArray( _
         ByVal count As Long, _
         Optional ByVal value As Variant = Empty) As Variant
 
@@ -252,14 +422,14 @@ Function init_array( _
     End If
     
     If IsEmpty(value) Then
-        init_array = ary
+        InitArray = ary
     End If
     
     Dim i As Long
     For i = 0 To UBound(ary)
         ary(i) = value
     Next
-    init_array = ary
+    InitArray = ary
 
 End Function
 
@@ -268,28 +438,28 @@ End Function
 'param:ary1-Variant(Of Array)
 'param:ary2-Variant(Of Array)
 'return:Variant(Of Array)
-Function joint_array( _
+Function JointArray( _
         ByVal ary1 As Variant, _
         ByVal ary2 As Variant) As Variant
 
     Select Case True
         Case Not IsArray(ary1) And Not IsArray(ary2)
-            joint_array = Empty
+            JointArray = Array() 'Empty
             Exit Function
         Case Not IsArray(ary1)
-            joint_array = ary2
+            JointArray = ary2
             Exit Function
         Case Not IsArray(ary2)
-            joint_array = ary1
+            JointArray = ary1
             Exit Function
         Case UBound(ary1) < 0 And UBound(ary2) > -1
-            joint_array = ary2
+            JointArray = ary2
             Exit Function
         Case UBound(ary1) > -1 And UBound(ary2) < 0
-            joint_array = ary1
+            JointArray = ary1
             Exit Function
         Case UBound(ary1) < 0 And UBound(ary2) < 0
-            joint_array = Empty
+            JointArray = Array() 'Empty
             Exit Function
         End Select
         
@@ -307,7 +477,7 @@ Function joint_array( _
             Next
         End If
         
-        joint_array = ary1
+        JointArray = ary1
 
 End Function
 
@@ -317,7 +487,7 @@ End Function
 'param:startIdx-Long
 'param:endIdx-Long
 'return:Variant(Of Array)
-Function slice( _
+Function Slice( _
         ByVal ary As Variant, _
         ByVal startIdx As Long, _
         ByVal endIdx As Long) As Variant
@@ -335,7 +505,7 @@ Function slice( _
         rngAry(i - startIdx) = ary(i)
     Next
     
-    slice = rngAry
+    Slice = rngAry
 
 End Function
 
@@ -343,12 +513,12 @@ End Function
 '配列のディープコピー
 'param:ary-Variant(Of Array)
 'return:Variant(Of Array)
-Function deep_copy_array( _
+Function DeepCopyArray( _
         ByVal ary As Variant) As Variant
 
     If Not IsArray(ary) Then Exit Function
 
-    deep_copy_array = slice(ary, 0, UBound(ary))
+    DeepCopyArray = Slice(ary, 0, UBound(ary))
 
 End Function
 
@@ -357,11 +527,11 @@ End Function
 'param:ary1-Variant(Of Array)
 'param:ary2-Variant(Of Array)
 'return:Boolean
-Function is_equal_array( _
+Function IsEqualArray( _
         ByVal ary1 As Variant, _
         ByVal ary2 As Variant) As Boolean
 
-    is_equal_array = False
+    IsEqualArray = False
     
     If Not IsArray(ary1) Or Not IsArray(ary2) Then Exit Function
     If Not UBound(ary1) = UBound(ary2) Then Exit Function
@@ -371,7 +541,7 @@ Function is_equal_array( _
         If Not ary1(i) = ary2(i) Then Exit Function
     Next
     
-    is_equal_array = True
+    IsEqualArray = True
 
 End Function
 
@@ -380,18 +550,18 @@ End Function
 'コレクション内にLetとSetの要素を混ぜないで!!
 'param:lst-collection
 'return:Variant(Of Array)
-Function collection_to_array( _
+Function CollectionToArray( _
         ByVal lst As Variant) As Variant
 
     If lst.count < 1 Then
-        collection_to_array = Array()
+        CollectionToArray = Array()
         Exit Function
     End If
     
     If IsObject(lst.Item(1)) Then
-        collection_to_array = collection_to_array_set(lst)
+        CollectionToArray = CollectionToArraySet(lst)
     Else
-        collection_to_array = collection_to_array_let(lst)
+        CollectionToArray = CollectionToArrayLet(lst)
     End If
 
 End Function
@@ -400,14 +570,14 @@ End Function
 '-コレクションの配列化-set
 'param:lst-collection
 'return:Variant(Of Array)
-Function collection_to_array_set( _
+Function CollectionToArraySet( _
         ByVal lst As Variant) As Variant
 
     Dim lstCount As Long
     lstCount = lst.count
 
     If lstCount < 1 Then
-        collection_to_array_set = Array()
+        CollectionToArraySet = Array()
         Exit Function
     End If
 
@@ -419,7 +589,7 @@ Function collection_to_array_set( _
         Set ary(i - 1) = lst(i)
     Next
 
-    collection_to_array_set = ary
+    CollectionToArraySet = ary
 
 End Function
 
@@ -427,14 +597,14 @@ End Function
 '-コレクションの配列化-let
 'param:lst-collection
 'return:Variant(Of Array)
-Function collection_to_array_let( _
+Function CollectionToArrayLet( _
         ByVal lst As Variant) As Variant
 
     Dim lstCount As Long
     lstCount = lst.count
 
     If lstCount < 1 Then
-        collection_to_array_let = Array()
+        CollectionToArrayLet = Array()
         Exit Function
     End If
 
@@ -446,7 +616,7 @@ Function collection_to_array_let( _
         Let ary(i - 1) = lst(i)
     Next
 
-    collection_to_array_let = ary
+    CollectionToArrayLet = ary
 
 End Function
 
@@ -454,7 +624,7 @@ End Function
 '配列のコレクション化
 'param:Variant(Of Array)
 'return:collection
-Function array_to_collection( _
+Function ArrayToCollection( _
         ByVal ary As Variant) As Collection
 
     Dim lst As Collection
@@ -467,8 +637,99 @@ Function array_to_collection( _
         lst.Add v
     Next
 
-    Set array_to_collection = lst
+    Set ArrayToCollection = lst
 
+End Function
+
+
+'配列のスライス
+'param: arr-Variant(Of Array)
+'param: StartIndex(opt)-スタートインデックス
+'param: EndIndex(opt)-エンドインデックス
+'return:- スライスされた配列
+Function ArraySlice( _
+        ByVal arr As Variant, _
+        Optional ByVal StartIndex As Long = 0, _
+        Optional ByVal EndIndex As Long = -1) As Variant
+
+    ' EndIndex が省略された場合、配列の最後のインデックスを設定
+    If EndIndex = -1 Then
+        EndIndex = UBound(arr)
+    End If
+    
+    ' エラーチェック
+    If StartIndex < LBound(arr) Or EndIndex > UBound(arr) Or StartIndex > EndIndex Then
+        ArraySlice = Array() ' 空の配列を返す
+        Exit Function
+    End If
+    
+    ' 結果配列のサイズを設定
+    Dim result() As Variant
+    ReDim result(0 To EndIndex - StartIndex)
+    
+    ' 配列をスライス
+    Dim j As Long
+    j = 0
+    
+    Dim i As Long
+    For i = StartIndex To EndIndex
+        If IsObject(arr(0)) Then
+            Set result(j) = arr(i)
+        Else
+            Let result(j) = arr(i)
+        End If
+        j = j + 1
+    Next i
+    
+    ArraySlice = result
+
+End Function
+
+
+'************************************************************************
+'*  バブルソート
+'*  param: arrTmp-値型の配列
+'*  return: ソートされた配列
+'************************************************************************
+Function BubbleSort( _
+        ByVal arrTmp As Variant) As Variant
+
+    Dim i As Long, j As Long
+    Dim vTmp As Variant
+
+    For i = LBound(arrTmp) To UBound(arrTmp) - 1
+        For j = i + 1 To UBound(arrTmp)
+            If ExtractNumericPart(arrTmp(j)) < ExtractNumericPart(arrTmp(i)) Then
+                vTmp = arrTmp(i)
+                arrTmp(i) = arrTmp(j)
+                arrTmp(j) = vTmp
+            End If
+        Next j
+    Next i
+
+    BubbleSort = arrTmp
+
+End Function
+
+
+'------------------------------------------------------------------------
+'-  数値部分の抽出
+'-  param: sTxt-ターゲット文字列
+'-  return: 数値位置インデックス
+'------------------------------------------------------------------------
+Private Function ExtractNumericPart( _
+        ByVal sTxt As String) As Long
+
+    Dim sNumericPart As String
+    Dim i As Long
+
+    For i = 1 To Len(sTxt)
+        If IsNumeric(Mid(sTxt, i, 1)) Then
+            sNumericPart = sNumericPart & Mid(sTxt, i, 1)
+        End If
+    Next i
+
+    ExtractNumericPart = CLng(sNumericPart)
 
 End Function
 
@@ -476,25 +737,25 @@ End Function
 '*****IOな関数*****
 'FileSystemObject
 'return:Object(Of FileSystemObject)
-Function get_fso() As Object
-    Set get_fso = CreateObject("Scripting.FileSystemObject")
+Function GetFso() As Object
+    Set GetFso = CreateObject("Scripting.FileSystemObject")
 End Function
 
 
 'Dirﾊﾟｽ/ﾌｧｲﾙ名/拡張子 分割
 'param:FullPath-ファイルパス
 'return:Variant(Of Array(Of String)) (0-Path 1-BaseName 2-Extension)
-Function split_path_name( _
+Function SplitPathName( _
         ByVal fullpath As String) As Variant
 
-    Dim path(2) As String
-    With get_fso
+    Dim path(2) As Variant ' String
+    With GetFso
         path(0) = .GetParentFolderName(fullpath)
         path(1) = .GetBaseName(fullpath)
         path(2) = .GetExtensionName(fullpath)
     End With
 
-    split_path_name = path
+    SplitPathName = path
 
 End Function
 
@@ -502,15 +763,15 @@ End Function
 'Dirﾊﾟｽ/ﾌｧｲﾙ名/拡張子 連結
 'param:Path-Variant(Of Array(Of String)) (0-Path 1-BaseName 2-Extension)
 'return:ファイルパス
-Function joint_path_name( _
+Function JointPathName( _
         ByVal path As Variant) As String
 
-    joint_path_name = ""
+    JointPathName = ""
 
     If Not IsArray(path) Then Exit Function '未対応
     If Not UBound(path) = 2 Then Exit Function '未対応
     
-    joint_path_name = get_fso().BuildPath(path(0), path(1) & "." & path(2))
+    JointPathName = GetFso().BuildPath(path(0), path(1) & "." & path(2))
 
 End Function
 
@@ -519,21 +780,25 @@ End Function
 '重複する場合 (ファイルベース名)_(ナンバリング) とする
 'param:Path-ファイルパス
 'return:重複無しパス
-Function get_unique_path( _
+Function GetUniquePath( _
         ByVal oldPath As String) As String
-    Dim path() As Varian
-    path = split_path_name(oldPath)
+        
+    Dim path() As Variant
+    path = SplitPathName(oldPath)
     path(2) = "." & path(2)
+
+    'ファイル名に使用出来ない文字の置き換え
+    path(1) = ReplaceInvalidChars(path(1))
+
+    Dim fso As Object
+    Set fso = GetFso()
 
     Dim newPath As String
     newPath = path(0) + "\" + path(1)
     If Not fso.FileExists(newPath + path(2)) Then
-        get_unique_path = newPath + path(2)
+        GetUniquePath = newPath + path(2)
         Exit Function
     End If
-
-    Dim fso As Object
-    Set fso = get_fso()
 
     Dim tempName As String
     Dim i As Long
@@ -542,10 +807,29 @@ Function get_unique_path( _
         i = i + 1
         tempName = newPath + "_" + CStr(i) + path(2)
         If Not fso.FileExists(tempName) Then
-            get_unique_path = tempName
+            GetUniquePath = tempName
             Exit Function
         End If
     Loop
+
+End Function
+
+
+'************************************************************************
+'*  ファイル名に使用できない文字を[_]に置き換える
+'*  param: sPath-ファイル名文字列
+'*  return: ファイル名に使用出来る文字列
+'************************************************************************
+Function ReplaceInvalidChars( _
+        ByVal sPath As String) As String
+
+    Dim oRegex As Object
+    Set oRegex = CreateObject("VBScript.RegExp")
+    
+    oRegex.Pattern = "[\/:*?""<>|]"
+    oRegex.Global = True
+    
+    ReplaceInvalidChars = oRegex.Replace(sPath, "_")
 
 End Function
 
@@ -554,15 +838,15 @@ End Function
 '1行で読み込んでいるので改行でsplitして
 'param:path-string
 'return:string
-Function read_file( _
+Function ReadFile( _
         ByVal path As String) As String
 
-    read_file = ""
+    ReadFile = ""
 
     On Error Resume Next
 
-    With get_fso
-        read_file = .OpenTextFile(path).ReadAll
+    With GetFso
+        ReadFile = .OpenTextFile(path).ReadAll
         .Close
     End With
 
@@ -574,14 +858,34 @@ End Function
 'ファイルの書き出し
 'param:path-string
 'param:txt-string
-Sub write_file( _
+'param:IsAppending(opt)-追記の場合True
+Sub WriteFile( _
         ByVal path As String, _
-        ByVal txt As String)
+        ByVal Txt As String, _
+        Optional ByVal IsAppending = False)
 
-    With get_fso().OpenTextFile(path, 2, True)
-        .Write txt
+    Dim iIoMode As Integer
+    iIoMode = IIf(IsAppending, 8, 2)
+
+    With GetFso().OpenTextFile(path, iIoMode, True)
+        On Error Resume Next
+        .Write Txt
+        If Not Err.Number = 0 Then
+            .Write "*** Write Errar ***"
+        End If
+        On Error GoTo 0
         .Close
     End With
+
+End Sub
+
+
+'スリープ
+'param: dMillisecond-ミリ秒
+Sub Wait( _
+        ByVal dMillisecond As Double)
+
+    Sleep dMillisecond
 
 End Sub
 
